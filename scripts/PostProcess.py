@@ -1,6 +1,7 @@
 ﻿from PIL import Image, ImageDraw
 import argparse
 import sys
+import math
 	
 def getNodePosition(i, nodes, deforms):
 	(x, y) = nodes[i]
@@ -75,6 +76,15 @@ def PostProcess(inputfile, outputfile):
 		deforms.append(float(line))
 	for line in resultsContent[nodesCount*2:]:
 		stresses.append(float(line))
+		
+	max_stress = 0
+	min_stress = stresses[0]
+	for stress in stresses:
+		if max_stress < stress: 
+			max_stress = stress
+		if min_stress > stress: 
+			min_stress = stress
+	print("Max stress: " + str(max_stress))
 			
 	def Transform(point):
 		x = (point[0] - center[0]) / scale / 1.5 * image.size[0] + image.size[0]/2.0
@@ -92,10 +102,16 @@ def PostProcess(inputfile, outputfile):
 	image.save("initial.png", "PNG")
 
 	draw.rectangle([(0, 0), image.size], fill=0x777777)
-
+	
+	rangesIntervals = 12
+	
+	if max_stress == min_stress:
+		max_stress += 1.0
+		min_stress -= 1.0
+	
 	for idx,element in enumerate(elements):
-		v = stresses[idx] * 0.3
-		#float v = floor(w * (u_rangesIntervals.z + 1.0))/u_rangesIntervals.z;
+		v = (stresses[idx] - min_stress) / (max_stress - min_stress)
+		#v = math.floor(v * (rangesIntervals + 1.0))/rangesIntervals;
 		colorf = ((v - 0.5)*4.0, 2.0 - abs(v- 0.5)*4.0,	2.0 - v*4.0)
 		colori = (int(colorf[0]*255), int(colorf[1]*255), int(colorf[2]*255))
 		draw.polygon(
