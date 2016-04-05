@@ -3,19 +3,12 @@ import argparse
 import sys
 import math
 	
-def getNodePosition(i, nodes, deforms):
-	(x, y) = nodes[i]
-	return (
-		x + deforms[2 * i + 0] * 50.0,
-		y + deforms[2 * i + 1] * 50.0
-	)
-
-def PostProcess(inputfile, outputfile):
+def PostProcess(inputfile):
 	content = []
 	with open(inputfile) as f:
 		content = f.readlines()
 
-	line = 1
+	line = 0
 	nodesCount = int(content[line])
 	line+=1
 
@@ -66,70 +59,24 @@ def PostProcess(inputfile, outputfile):
 	if scale < max_y - min_y:
 		scale = max_y - min_y
 
-	deforms = []
-	stresses = []
-	resultsContent = []
-	with open(outputfile) as f:
-		resultsContent = f.readlines()
-
-	for line in resultsContent[:nodesCount*2]:
-		deforms.append(float(line))
-	for line in resultsContent[nodesCount*2:]:
-		stresses.append(float(line))
-		
-	max_stress = 0
-	min_stress = stresses[0]
-	for stress in stresses:
-		if max_stress < stress: 
-			max_stress = stress
-		if min_stress > stress: 
-			min_stress = stress
-	print("Max stress: " + str(max_stress))
-			
 	def Transform(point):
-		x = (point[0] - center[0]) / scale / 1.5 * image.size[0] + image.size[0]/2.0
-		y = (point[1] - center[1]) / scale / 1.5 * image.size[1] + image.size[1]/2.0
+		x = (point[0] - center[0]) / scale / 1.2 * image.size[0] + image.size[0]/2.0
+		y = (point[1] - center[1]) / scale / 1.2 * image.size[1] + image.size[1]/2.0
 		return (x, image.size[1] - y)
 		
-	image = Image.new("RGB", (1024,1024))
+	image = Image.new("RGB", (2048,2048))
 
-	draw = ImageDraw.Draw(image)
+	draw = ImageDraw.Draw(image, "RGBA")
 	draw.rectangle([(0, 0), image.size], fill=0x777777)
 
 	for element in elements:
-		draw.polygon([Transform(nodes[element[0]]), Transform(nodes[element[1]]), Transform(nodes[element[2]])], fill=0x20a020, outline=0x707020)
+		draw.polygon([Transform(nodes[element[0]]), Transform(nodes[element[1]]), Transform(nodes[element[2]])], fill=(0, 255, 0, 125), outline=0x707020)
 
-	image.save("initial.png", "PNG")
-
-	draw.rectangle([(0, 0), image.size], fill=0x777777)
-	
-	rangesIntervals = 12
-	
-	if max_stress == min_stress:
-		max_stress += 1.0
-		min_stress -= 1.0
-	
-	for idx,element in enumerate(elements):
-		v = (stresses[idx] - min_stress) / (max_stress - min_stress)
-		#v = math.floor(v * (rangesIntervals + 1.0))/rangesIntervals;
-		colorf = ((v - 0.5)*4.0, 2.0 - abs(v- 0.5)*4.0,	2.0 - v*4.0)
-		colori = (int(colorf[0]*255), int(colorf[1]*255), int(colorf[2]*255))
-		draw.polygon(
-			[
-				Transform(getNodePosition(element[0], nodes, deforms)),
-				Transform(getNodePosition(element[1], nodes, deforms)),
-				Transform(getNodePosition(element[2], nodes, deforms))
-			], 
-			fill = colori
-		)
-
-	image.save("deformed.png", "PNG")
-
+	image.save(inputfile + ".png", "PNG")
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser(description='Tool postprocessing output of MinimalFem.',
 									 epilog = 'Visit http://podgorskiy.com/spblog/392/writing-a-fem-solver-in-less-the-180-lines-of-code')
 	parser.add_argument('inputfile', metavar='inputfile', type=str, help='Path to input file.')
-	parser.add_argument('outputfile', metavar='outputfile', type=str, help='Path to output file.')
 	args = parser.parse_args()
-	PostProcess(args.inputfile, args.outputfile)
+	PostProcess(args.inputfile)

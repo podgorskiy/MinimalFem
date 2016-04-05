@@ -1,33 +1,3 @@
-/*MinimalFEM
-
-Author: Stanislav Pidhorskyi (Podgorskiy)
-stanislav@podgorskiy.com
-stpidhorskyi@mix.wvu.edu
-
-The source code available here: https://github.com/podgorskiy/MinimalFEM/
-
-The MIT License (MIT)
-
-Copyright (c) 2015 Stanislav Pidhorskyi
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.*/
-
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <string>
@@ -37,10 +7,13 @@ SOFTWARE.*/
 
 struct Element
 {
-	void CalculateStiffnessMatrix(const Eigen::Matrix3f& D, std::vector<Eigen::Triplet<float> >& triplets);
+	void CalculateStiffnessMatrix(const Eigen::VectorXf& nodesX, const Eigen::VectorXf& nodesY, const Eigen::Matrix3f& D);
+	void GetTriplets(std::vector<Eigen::Triplet<float> >& triplets);
 
-	Eigen::Matrix<float, 3, 6> B;
+	Eigen::Matrix<float, 6, 6> K;
 	int nodesIds[3];
+
+	EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 };
 
 struct Constraint
@@ -55,14 +28,93 @@ struct Constraint
 	Type type;
 };
 
-int                      	nodesCount;
-Eigen::VectorXf          	nodesX;
-Eigen::VectorXf          	nodesY;
-Eigen::VectorXf          	loads;
-std::vector< Element >   	elements;
-std::vector< Constraint >	constraints;
+struct Mesh 
+{
+	int                      	nodesCount;
+	Eigen::VectorXf          	nodesX;
+	Eigen::VectorXf          	nodesY;
+	Eigen::VectorXf          	loads;
+	std::vector< Element, Eigen::aligned_allocator<Element> >   	elements;
+	std::vector< Constraint >	constraints;
+	std::vector< int >	freeNodes;
 
-void Element::CalculateStiffnessMatrix(const Eigen::Matrix3f& D, std::vector<Eigen::Triplet<float> >& triplets)
+	void ReadMesh(std::ifstream& infile)
+	{
+		infile >> nodesCount;
+		nodesX.resize(nodesCount);
+		nodesY.resize(nodesCount);
+
+		for (int i = 0; i < nodesCount; ++i)
+		{
+			infile >> nodesX[i] >> nodesY[i];
+		}
+
+		int elementCount;
+		infile >> elementCount;
+
+		for (int i = 0; i < elementCount; ++i)
+		{
+			Element element;
+			infile >> element.nodesIds[0] >> element.nodesIds[1] >> element.nodesIds[2];
+			elements.push_back(element);
+		}
+	}
+
+	void Merge(const Mesh& other)
+	{
+		nodesX.conservativeResize(nodesCount + other.nodesCount);
+		nodesY.conservativeResize(nodesCount + other.nodesCount);
+		for (int i = 0; i < other.nodesCount; ++i)
+		{
+			nodesX[nodesCount + i] = other.nodesX[i];
+			nodesY[nodesCount + i] = other.nodesY[i];
+		}
+		for (auto it = other.elements.begin(); it != other.elements.end(); ++it)
+		{
+			Element e;
+			e.nodesIds[0] = it->nodesIds[0] + nodesCount;
+			e.nodesIds[1] = it->nodesIds[1] + nodesCount;
+			e.nodesIds[2] = it->nodesIds[2] + nodesCount;
+			elements.push_back(e);
+		}
+		nodesCount += other.nodesCount;
+		loads.resize(2 * nodesCount);
+		loads.setZero();
+	}
+
+	void Weld(int a, int b)
+	{
+		float deltaX = nodesX[a] - nodesX[b];
+		float deltaY = nodesY[a] - nodesY[b];
+		for (auto it = elements.begin(); it != elements.end(); ++it)
+		{
+			Eigen::Matrix<float, 6, 1> deformation;
+			deformation.setZero();
+			
+			for (int i = 0; i < 3; ++i)
+			{
+				if (it->nodesIds[i] == b)
+				{
+					deformation[2 * i + 0] = deltaX;
+					deformation[2 * i + 1] = deltaY;
+					it->nodesIds[i] = a;
+
+					Eigen::Matrix<float, 6, 1> F = -it->K * deformation;
+					for (int j = 0; j < 3; ++j)
+					{
+						loads[2 * it->nodesIds[j] + 0] += F[2 * j + 0];
+						loads[2 * it->nodesIds[j] + 1] += F[2 * j + 1];
+					}
+
+					break;
+				}
+			}
+		}
+		freeNodes.push_back(b);
+	}
+};
+
+void Element::CalculateStiffnessMatrix(const Eigen::VectorXf& nodesX, const Eigen::VectorXf& nodesY, const Eigen::Matrix3f& D)
 {
 	Eigen::Vector3f x, y;
 	x << nodesX[nodesIds[0]], nodesX[nodesIds[1]], nodesX[nodesIds[2]];
@@ -72,6 +124,7 @@ void Element::CalculateStiffnessMatrix(const Eigen::Matrix3f& D, std::vector<Eig
 	C << Eigen::Vector3f(1.0f, 1.0f, 1.0f), x, y;
 	
 	Eigen::Matrix3f IC = C.inverse();
+	Eigen::Matrix<float, 3, 6> B;
 
 	for (int i = 0; i < 3; i++)
 	{
@@ -82,8 +135,11 @@ void Element::CalculateStiffnessMatrix(const Eigen::Matrix3f& D, std::vector<Eig
 		B(2, 2 * i + 0) = IC(2, i);
 		B(2, 2 * i + 1) = IC(1, i);
 	}
-	Eigen::Matrix<float, 6, 6> K = B.transpose() * D * B * C.determinant() / 2.0f;
+	K = B.transpose() * D * B * C.determinant() / 2.0f;
+}
 
+void Element::GetTriplets(std::vector<Eigen::Triplet<float> >& triplets)
+{
 	for (int i = 0; i < 3; i++)
 	{
 		for (int j = 0; j < 3; j++)
@@ -139,18 +195,9 @@ void ApplyConstraints(Eigen::SparseMatrix<float>& K, const std::vector<Constrain
 
 int main(int argc, char *argv[])
 {
-	if ( argc != 3 )
-    {
-        std::cout<<"usage: "<< argv[0] <<" <input file> <output file>\n";
-        return 1;
-    }
+	float poissonRatio = 0.3f;
+	float youngModulus = 1.0f;
 	
-	std::ifstream infile(argv[1]);
-	std::ofstream outfile(argv[2]);
-	
-	float poissonRatio, youngModulus;
-	infile >> poissonRatio >> youngModulus;
-
 	Eigen::Matrix3f D;
 	D <<
 		1.0f,        	poissonRatio,	0.0f,
@@ -158,81 +205,84 @@ int main(int argc, char *argv[])
 		0.0f,        	0.0f,        	(1.0f - poissonRatio) / 2.0f;
 
 	D *= youngModulus / (1.0f - pow(poissonRatio, 2.0f));
+	
+	std::ifstream infileA(argv[1]);
+	std::ifstream infileB(argv[2]);
+	
+	Mesh tileA;
+	Mesh tileB;
 
-	infile >> nodesCount;
-	nodesX.resize(nodesCount);
-	nodesY.resize(nodesCount);
+	tileA.ReadMesh(infileA);
+	tileB.ReadMesh(infileB);
 
-	for (int i = 0; i < nodesCount; ++i)
+	std::vector<std::pair<int, int> > weldNodes;
+
+	for (int i = 3; i < argc;)
 	{
-		infile >> nodesX[i] >> nodesY[i];
+		weldNodes.push_back(std::make_pair(atoi(argv[i + 0]), atoi(argv[i + 1]) + tileA.nodesCount));
+		i += 2;
 	}
 
-	int elementCount;
-	infile >> elementCount;
+	tileA.Merge(tileB);
 
-	for (int i = 0; i < elementCount; ++i)
+	for (auto it = tileA.elements.begin(); it != tileA.elements.end(); ++it)
 	{
-		Element element;
-		infile >> element.nodesIds[0] >> element.nodesIds[1] >> element.nodesIds[2];
-		elements.push_back(element);
-	}
-
-	int constraintCount;
-	infile >> constraintCount;
-
-	for (int i = 0; i < constraintCount; ++i)
-	{
-		Constraint constraint;
-		int type;
-		infile >> constraint.node >> type;
-		constraint.type = static_cast<Constraint::Type>(type);
-		constraints.push_back(constraint);
-	}
-
-	loads.resize(2 * nodesCount);
-	loads.setZero();
-
-	int loadsCount;
-	infile >> loadsCount;
-
-	for (int i = 0; i < loadsCount; ++i)
-	{
-		int node;
-		float x, y;
-		infile >> node >> x >> y;
-		loads[2 * node + 0] = x;
-		loads[2 * node + 1] = y;
+		it->CalculateStiffnessMatrix(tileA.nodesX, tileA.nodesY, D);
 	}
 	
-	std::vector<Eigen::Triplet<float> > triplets;
-	for (std::vector<Element>::iterator it = elements.begin(); it != elements.end(); ++it)
+	for (auto it = weldNodes.begin(); it != weldNodes.end(); ++it)
 	{
-		it->CalculateStiffnessMatrix(D, triplets);
+		tileA.Weld(it->first, it->second);
 	}
 
-	Eigen::SparseMatrix<float> globalK(2 * nodesCount, 2 * nodesCount);
+	std::vector<Eigen::Triplet<float> > triplets;
+	for (auto it = tileA.elements.begin(); it != tileA.elements.end(); ++it)
+	{
+		it->GetTriplets(triplets);
+	}
+
+	Eigen::SparseMatrix<float> globalK(2 * tileA.nodesCount, 2 * tileA.nodesCount);
 	globalK.setFromTriplets(triplets.begin(), triplets.end());
 
-	ApplyConstraints(globalK, constraints);
+	for (auto it = tileA.freeNodes.begin(); it != tileA.freeNodes.end(); ++it)
+	{
+		globalK.insert(2 * *it + 0, 2 * *it + 0) = 1.0f;
+		globalK.insert(2 * *it + 1, 2 * *it + 1) = 1.0f;
+	}
+
+	Constraint c;
+	c.node = 0;
+	c.type = Constraint::UXY;
+	tileA.constraints.push_back(c);
+	c.node = 1;
+	c.type = Constraint::UY;
+	tileA.constraints.push_back(c);
+
+	ApplyConstraints(globalK, tileA.constraints);
 
 	Eigen::SimplicialLDLT<Eigen::SparseMatrix<float> > solver(globalK);
 
-	Eigen::VectorXf displacements = solver.solve(loads);
+	Eigen::VectorXf displacements = solver.solve(tileA.loads);
 
-	outfile << displacements << std::endl;
+	std::ofstream outfile("stitched.txt");
 
-	for (std::vector<Element>::iterator it = elements.begin(); it != elements.end(); ++it)
+	outfile << tileA.nodesCount << '\n';
+
+	for (int i = 0; i < tileA.nodesCount; ++i)
 	{
-		Eigen::Matrix<float, 6, 1> delta;
-		delta << displacements.segment<2>(2 * it->nodesIds[0]),
-		         displacements.segment<2>(2 * it->nodesIds[1]),
-		         displacements.segment<2>(2 * it->nodesIds[2]);
-
-		Eigen::Vector3f sigma = D * it->B * delta;
-		float sigma_mises = sqrt(sigma[0] * sigma[0] - sigma[0] * sigma[1] + sigma[1] * sigma[1] + 3.0f * sigma[2] * sigma[2]);
-
-		outfile << sigma_mises << std::endl;
+		outfile 
+			<< tileA.nodesX[i] + displacements[2 * i + 0] << ' '
+			<< tileA.nodesY[i] + displacements[2 * i + 1]
+			<< '\n';
 	}
+
+	outfile << tileA.elements.size() << '\n';
+
+	for (auto it = tileA.elements.begin(); it != tileA.elements.end(); ++it)
+	{
+		Element element;
+		outfile << it->nodesIds[0] << ' ' << it->nodesIds[1] << ' ' << it->nodesIds[2] << '\n';
+	}
+
 	return 0;
 }
