@@ -1,5 +1,5 @@
 CC=g++
-CFLAGS= -Wall -Os -I eigen
+CFLAGS= -Wall -Os -std=c++11 -I eigen
 all: main.o
 	$(CC) main.o -o MinimalFEM
 
