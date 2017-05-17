@@ -82,7 +82,7 @@ void Element::CalculateStiffnessMatrix(const Eigen::Matrix3f& D, std::vector<Eig
 		B(2, 2 * i + 0) = IC(2, i);
 		B(2, 2 * i + 1) = IC(1, i);
 	}
-	Eigen::Matrix<float, 6, 6> K = B.transpose() * D * B * C.determinant() / 2.0f;
+	Eigen::Matrix<float, 6, 6> K = B.transpose() * D * B * std::abs(C.determinant()) / 2.0f;
 
 	for (int i = 0; i < 3; i++)
 	{
